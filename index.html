@@ -481,18 +481,26 @@
   const BUFFERED_AMOUNT_HIGH = 4 * 1024 * 1024; // pause sending above 4MB buffered
   const BUFFERED_AMOUNT_LOW = 1 * 1024 * 1024;  // resume once below 1MB
 
-  // To materially improve connection success behind strict/symmetric NATs,
-  // add a free-tier TURN server here (e.g. from Cloudflare or Metered.ca):
-  //
-  // const peerConfig = {
-  //   config: {
-  //     iceServers: [
-  //       { urls: 'stun:stun.l.google.com:19302' },
-  //       { urls: 'turn:YOUR_TURN_HOST:3478', username: 'YOUR_USER', credential: 'YOUR_PASS' }
-  //     ]
-  //   }
-  // };
-  const peerConfig = {}; // uses PeerJS defaults (public STUN) if left empty
+  // TURN relay fallback. Without this, connections that can't find a direct
+  // path (common on corporate/hotel wifi, or two peers behind strict/symmetric
+  // NATs) will hang forever at "linking to peer...". These are the Open Relay
+  // Project's public *test* credentials — fine to try this with, but they're
+  // shared by everyone using this demo config, so get your own free-tier
+  // credentials (e.g. metered.ca or Cloudflare) before relying on this for
+  // real use: https://www.metered.ca/tools/openrelay/
+  const peerConfig = {
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun.relay.metered.ca:80' },
+        { urls: 'turn:global.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:global.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:global.relay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+      ]
+    }
+  };
+  const CONNECT_TIMEOUT_MS = 15000;
 
   // ---------- Session code generator ----------
   const ADJ = ['amber','quiet','static','open','loose','clear','dark','narrow','stray','warm','cold','low','far','odd','pale','worn','faint','wide','still','bare'];
@@ -592,7 +600,15 @@
     conn = c;
     setSignal('connecting', 'linking to peer…');
 
+    const timeoutId = setTimeout(() => {
+      if (conn && !conn.open) {
+        setSignal('error', "couldn't establish a connection — see console, or try the TURN note in the code", 'err');
+        console.warn('Connection timed out. Common causes: both peers behind restrictive/symmetric NAT and TURN relay also failed, a firewall blocking WebRTC/UDP entirely, or one side closed the tab. Check the RTCPeerConnection ICE state above for details.');
+      }
+    }, CONNECT_TIMEOUT_MS);
+
     conn.on('open', () => {
+      clearTimeout(timeoutId);
       const code = codeDisplay.textContent !== '—' ? codeDisplay.textContent : codeInput.value.trim();
       setSignal('connected', `connected — session ${code}`, 'ok');
       showView('transfer');
@@ -601,14 +617,24 @@
     conn.on('data', handleIncomingData);
 
     conn.on('close', () => {
+      clearTimeout(timeoutId);
       setSignal('idle', 'peer disconnected', 'err');
       conn = null;
     });
 
     conn.on('error', (err) => {
+      clearTimeout(timeoutId);
       console.error('Connection error', err);
       setSignal('error', 'connection error', 'err');
     });
+
+    // Extra diagnostics: log ICE connection state changes to the console so
+    // a stuck connection is easier to debug than a silent hang.
+    if (c.peerConnection) {
+      c.peerConnection.addEventListener('iceconnectionstatechange', () => {
+        console.log('ICE connection state:', c.peerConnection.iceConnectionState);
+      });
+    }
   }
 
   // ---------- Host flow ----------
