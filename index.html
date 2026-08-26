@@ -487,22 +487,33 @@
   const BUFFERED_AMOUNT_HIGH = 4 * 1024 * 1024; // pause sending above 4MB buffered
   const BUFFERED_AMOUNT_LOW = 1 * 1024 * 1024;  // resume once below 1MB
 
-  // TURN relay fallback, using your own Metered.ca credentials. Without this,
-  // connections that can't find a direct path (common on cellular/CGNAT, or
-  // corporate/hotel wifi) will hang forever at "linking to peer...".
-  const peerConfig = {
-    config: {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun.relay.metered.ca:80' },
-        { urls: 'turn:global.relay.metered.ca:80', username: '855d7c924ab4b45e1d54b438', credential: 'RTPnAhbsc9TNV7c0' },
-        { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: '855d7c924ab4b45e1d54b438', credential: 'RTPnAhbsc9TNV7c0' },
-        { urls: 'turn:global.relay.metered.ca:443', username: '855d7c924ab4b45e1d54b438', credential: 'RTPnAhbsc9TNV7c0' },
-        { urls: 'turn:global.relay.metered.ca:443?transport=tcp', username: '855d7c924ab4b45e1d54b438', credential: 'RTPnAhbsc9TNV7c0' },
-      ]
-    }
-  };
+  // TURN relay fallback, via Cloudflare Realtime TURN. Credentials are
+  // short-lived and fetched from a small Cloudflare Worker (see the deploy
+  // instructions you were given) rather than embedded here, since the
+  // Cloudflare API secret that mints them must never ship to the browser.
+  //
+  // Replace this with your own Worker URL after deploying it.
+  const TURN_WORKER_URL = 'https://wireshare.antongrinev04.workers.dev/';
+
   const CONNECT_TIMEOUT_MS = 15000;
+
+  async function getIceServers() {
+    const fallback = [{ urls: 'stun:stun.l.google.com:19302' }];
+    if (!TURN_WORKER_URL || TURN_WORKER_URL.includes('YOUR-WORKER-SUBDOMAIN')) {
+      console.warn('TURN_WORKER_URL is not set — falling back to STUN-only, which will fail on restrictive networks.');
+      return fallback;
+    }
+    try {
+      const resp = await fetch(TURN_WORKER_URL);
+      if (!resp.ok) throw new Error(`Worker returned ${resp.status}`);
+      const data = await resp.json();
+      if (!data.iceServers) throw new Error('Worker response missing iceServers');
+      return [...fallback, ...data.iceServers];
+    } catch (err) {
+      console.error('Could not fetch TURN credentials from Worker, falling back to STUN-only', err);
+      return fallback;
+    }
+  }
 
   // ---------- Session code generator ----------
   // 6 characters, uppercase letters + numbers only.
@@ -562,7 +573,11 @@
   }
 
   // ---------- Peer setup ----------
-  function createPeer(withId) {
+  async function createPeer(withId) {
+    setSignal('connecting', 'fetching connection details…');
+    const iceServers = await getIceServers();
+    const peerConfig = { config: { iceServers } };
+
     setSignal('connecting', 'opening connection…');
     const p = withId ? new Peer(withId, peerConfig) : new Peer(peerConfig);
 
@@ -641,21 +656,21 @@
   }
 
   // ---------- Host flow ----------
-  function startHost() {
+  async function startHost() {
     const code = makeSessionCode();
     codeDisplay.textContent = code;
     showView('waiting');
-    peer = createPeer(code);
+    peer = await createPeer(code);
   }
 
   // ---------- Join flow ----------
-  function joinSession() {
+  async function joinSession() {
     const code = codeInput.value.trim().toUpperCase();
     if (!code) return;
     showView('waiting');
     codeDisplay.textContent = code;
     document.querySelector('#view-waiting .label').textContent = 'connecting to';
-    peer = createPeer(); // random id for the joiner
+    peer = await createPeer(); // random id for the joiner
     peer.on('open', () => {
       const c = peer.connect(code, { reliable: true });
       bindConnection(c);
