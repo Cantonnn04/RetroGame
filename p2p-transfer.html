@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wire — direct file transfer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spline+Sans+Mono:wght@400;500;600&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root {
+    --ink: #12151A;
+    --panel: #1B1F26;
+    --panel-raised: #232832;
+    --line: #2A303A;
+    --amber: #F0A93C;
+    --teal: #4FD1C5;
+    --red: #E8664F;
+    --paper: #E8E6DE;
+    --fog: #8B93A1;
+    --font-display: 'Sora', system-ui, sans-serif;
+    --font-mono: 'Spline Sans Mono', 'SF Mono', monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--ink);
+    color: var(--paper);
+    font-family: var(--font-display);
+    min-height: 100vh;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 20px 60px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+
+  .wrap {
+    width: 100%;
+    max-width: 560px;
+  }
+
+  header.top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 40px;
+  }
+
+  .wordmark {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--paper);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .wordmark .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+
+  .tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fog);
+    letter-spacing: 0.04em;
+  }
+
+  /* ---------- Signal line: the signature element ---------- */
+  .signal {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin: 8px 0 36px;
+    height: 46px;
+  }
+  .node {
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    border: 2px solid var(--line);
+    background: var(--panel);
+    flex-shrink: 0;
+    transition: border-color .4s ease, background .4s ease, box-shadow .4s ease;
+  }
+  .signal-track {
+    flex: 1;
+    max-width: 220px;
+    height: 2px;
+    position: relative;
+    background: repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 12px);
+  }
+  .signal-fill {
+    position: absolute;
+    top: 0; left: 0;
+    height: 2px;
+    width: 0%;
+    background: var(--fog);
+    transition: width .5s ease, background .4s ease;
+  }
+  .signal[data-state="connecting"] .signal-fill {
+    width: 60%;
+    background: var(--amber);
+    animation: pulse-slide 1.4s ease-in-out infinite;
+  }
+  .signal[data-state="connecting"] .node { border-color: var(--amber); }
+  .signal[data-state="connected"] .signal-fill { width: 100%; background: var(--teal); }
+  .signal[data-state="connected"] .signal-track { background: var(--line); }
+  .signal[data-state="connected"] .node {
+    border-color: var(--teal);
+    background: var(--teal);
+    box-shadow: 0 0 0 4px rgba(79, 209, 197, 0.15);
+  }
+  .signal[data-state="error"] .node { border-color: var(--red); }
+  .signal[data-state="error"] .signal-fill { width: 100%; background: var(--red); }
+
+  @keyframes pulse-slide {
+    0% { transform: translateX(-40%); width: 30%; }
+    50% { transform: translateX(140%); width: 30%; }
+    100% { transform: translateX(-40%); width: 30%; }
+  }
+
+  .status-line {
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fog);
+    margin-top: -24px;
+    margin-bottom: 32px;
+    letter-spacing: 0.02em;
+    min-height: 16px;
+  }
+  .status-line.err { color: var(--red); }
+  .status-line.ok { color: var(--teal); }
+
+  /* ---------- Landing ---------- */
+  .choices {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 480px) {
+    .choices { grid-template-columns: 1fr; }
+  }
+
+  .choice-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 24px 20px;
+    text-align: left;
+    cursor: pointer;
+    color: var(--paper);
+    font-family: var(--font-display);
+    transition: border-color .2s ease, transform .15s ease, background .2s ease;
+  }
+  .choice-card:hover { border-color: var(--fog); background: var(--panel-raised); }
+  .choice-card:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+  }
+  .choice-card:active { transform: scale(0.99); }
+  .choice-card .glyph {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    color: var(--amber);
+    margin-bottom: 14px;
+    display: block;
+  }
+  .choice-card h3 {
+    margin: 0 0 6px;
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .choice-card p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--fog);
+    line-height: 1.5;
+  }
+
+  /* ---------- Join form ---------- */
+  .join-form {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 24px;
+  }
+  .join-form label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fog);
+    letter-spacing: 0.05em;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+  }
+  .join-row { display: flex; gap: 10px; }
+  input#code-input {
+    flex: 1;
+    background: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: var(--paper);
+    font-family: var(--font-mono);
+    font-size: 16px;
+    padding: 12px 14px;
+    letter-spacing: 0.03em;
+  }
+  input#code-input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  input#code-input::placeholder { color: #4A5160; }
+
+  button {
+    font-family: var(--font-display);
+    font-weight: 600;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: background .15s ease, transform .1s ease;
+  }
+  button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  button:active { transform: scale(0.98); }
+
+  .btn-primary {
+    background: var(--amber);
+    color: #201404;
+    padding: 12px 20px;
+    font-size: 14px;
+  }
+  .btn-primary:hover { background: #f5b757; }
+  .btn-primary:disabled { background: var(--line); color: var(--fog); cursor: not-allowed; }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--fog);
+    border: 1px solid var(--line);
+    padding: 12px 18px;
+    font-size: 13px;
+  }
+  .btn-ghost:hover { color: var(--paper); border-color: var(--fog); }
+
+  .back-link {
+    display: inline-block;
+    margin-top: 18px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fog);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 0;
+  }
+  .back-link:hover { color: var(--paper); }
+
+  /* ---------- Waiting / code display ---------- */
+  .code-panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 32px 24px;
+    text-align: center;
+  }
+  .code-panel .label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fog);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .code-display {
+    font-family: var(--font-mono);
+    font-size: 34px;
+    font-weight: 600;
+    color: var(--amber);
+    letter-spacing: 0.04em;
+    margin-bottom: 20px;
+    word-break: break-all;
+  }
+  .code-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+  /* ---------- Transfer view ---------- */
+  .transfer-view { display: none; }
+  .transfer-view.active { display: block; }
+  .landing-view, .join-view, .waiting-view { display: none; }
+  .landing-view.active, .join-view.active, .waiting-view.active { display: block; }
+
+  .dropzone {
+    border: 1.5px dashed var(--line);
+    border-radius: 10px;
+    padding: 36px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s ease, background .2s ease;
+    margin-bottom: 22px;
+  }
+  .dropzone.drag-over { border-color: var(--amber); background: rgba(240,169,60,0.05); }
+  .dropzone:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  .dropzone p.main { margin: 0 0 4px; font-size: 14px; color: var(--paper); }
+  .dropzone p.sub { margin: 0; font-size: 12px; color: var(--fog); font-family: var(--font-mono); }
+  input#file-input { display: none; }
+
+  .transfer-list { display: flex; flex-direction: column; gap: 10px; }
+  .transfer-item {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .t-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    gap: 10px;
+  }
+  .t-name {
+    font-size: 13px;
+    color: var(--paper);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .t-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fog);
+    flex-shrink: 0;
+  }
+  .t-dir {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-right: 8px;
+  }
+  .t-dir.out { background: rgba(240,169,60,0.12); color: var(--amber); }
+  .t-dir.in { background: rgba(79,209,197,0.12); color: var(--teal); }
+  .t-bar-track {
+    height: 5px;
+    border-radius: 3px;
+    background: var(--line);
+    overflow: hidden;
+  }
+  .t-bar-fill {
+    height: 100%;
+    background: var(--fog);
+    width: 0%;
+    transition: width .15s linear;
+  }
+  .t-bar-fill.out { background: var(--amber); }
+  .t-bar-fill.in { background: var(--teal); }
+  .t-bar-fill.done { background: var(--teal); }
+  .t-download {
+    margin-top: 10px;
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--teal);
+    text-decoration: none;
+    border: 1px solid var(--line);
+    padding: 6px 12px;
+    border-radius: 6px;
+  }
+  .t-download:hover { border-color: var(--teal); }
+
+  .empty-note {
+    text-align: center;
+    color: var(--fog);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 20px 0;
+  }
+
+  footer {
+    margin-top: 48px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #454B58;
+    line-height: 1.6;
+    max-width: 480px;
+  }
+  footer a { color: #5A6270; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div class="wordmark"><span class="dot"></span>WIRE</div>
+    <div class="tag">peer&nbsp;to&nbsp;peer</div>
+  </header>
+
+  <div class="signal" id="signal" data-state="idle">
+    <div class="node"></div>
+    <div class="signal-track"><div class="signal-fill"></div></div>
+    <div class="node"></div>
+  </div>
+  <div class="status-line" id="status-line">not connected</div>
+
+  <!-- LANDING -->
+  <div class="landing-view active" id="view-landing">
+    <div class="choices">
+      <button class="choice-card" id="btn-start">
+        <span class="glyph">＋</span>
+        <h3>Start a session</h3>
+        <p>Get a code, then read it out to whoever you're sending files to.</p>
+      </button>
+      <button class="choice-card" id="btn-join">
+        <span class="glyph">→</span>
+        <h3>Join a session</h3>
+        <p>Enter the code you were given to connect directly.</p>
+      </button>
+    </div>
+  </div>
+
+  <!-- JOIN FORM -->
+  <div class="join-view" id="view-join">
+    <div class="join-form">
+      <label for="code-input">Session code</label>
+      <div class="join-row">
+        <input id="code-input" type="text" placeholder="amber-dial-07" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="btn-primary" id="btn-connect">Connect</button>
+      </div>
+    </div>
+    <button class="back-link" id="back-from-join">&larr; back</button>
+  </div>
+
+  <!-- WAITING (host) -->
+  <div class="waiting-view" id="view-waiting">
+    <div class="code-panel">
+      <div class="label">Your session code</div>
+      <div class="code-display" id="code-display">—</div>
+      <div class="code-actions">
+        <button class="btn-ghost" id="btn-copy">Copy code</button>
+      </div>
+    </div>
+    <button class="back-link" id="back-from-waiting">&larr; cancel</button>
+  </div>
+
+  <!-- TRANSFER VIEW -->
+  <div class="transfer-view" id="view-transfer">
+    <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Choose files to send">
+      <p class="main">Drop files here, or click to choose</p>
+      <p class="sub">sent directly to the other browser — nothing touches a server</p>
+      <input id="file-input" type="file" multiple>
+    </div>
+    <div class="transfer-list" id="transfer-list">
+      <div class="empty-note" id="empty-note">no transfers yet</div>
+    </div>
+  </div>
+
+  <footer>
+    Files move directly between browsers over a WebRTC connection.<br>
+    Close either tab and the session ends — nothing is stored anywhere.
+  </footer>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- Config ----------
+  const CHUNK_SIZE = 64 * 1024;         // 64KB per chunk
+  const BUFFERED_AMOUNT_HIGH = 4 * 1024 * 1024; // pause sending above 4MB buffered
+  const BUFFERED_AMOUNT_LOW = 1 * 1024 * 1024;  // resume once below 1MB
+
+  // To materially improve connection success behind strict/symmetric NATs,
+  // add a free-tier TURN server here (e.g. from Cloudflare or Metered.ca):
+  //
+  // const peerConfig = {
+  //   config: {
+  //     iceServers: [
+  //       { urls: 'stun:stun.l.google.com:19302' },
+  //       { urls: 'turn:YOUR_TURN_HOST:3478', username: 'YOUR_USER', credential: 'YOUR_PASS' }
+  //     ]
+  //   }
+  // };
+  const peerConfig = {}; // uses PeerJS defaults (public STUN) if left empty
+
+  // ---------- Session code generator ----------
+  const ADJ = ['amber','quiet','static','open','loose','clear','dark','narrow','stray','warm','cold','low','far','odd','pale','worn','faint','wide','still','bare'];
+  const NOUN = ['dial','wire','node','pulse','echo','relay','signal','channel','coil','patch','carrier','frequency','antenna','circuit','current','loop','wave','tone','link','beacon'];
+  function makeSessionCode() {
+    const a = ADJ[Math.floor(Math.random() * ADJ.length)];
+    const n = NOUN[Math.floor(Math.random() * NOUN.length)];
+    const d = String(Math.floor(Math.random() * 90) + 10);
+    return `${a}-${n}-${d}`;
+  }
+
+  // ---------- State ----------
+  let peer = null;
+  let conn = null;
+  const outgoing = new Map(); // id -> {file, sent, el}
+  const incoming = new Map(); // id -> {name, size, received, chunks, el}
+  let sendQueue = [];
+  let sending = false;
+
+  // ---------- DOM ----------
+  const views = {
+    landing: document.getElementById('view-landing'),
+    join: document.getElementById('view-join'),
+    waiting: document.getElementById('view-waiting'),
+    transfer: document.getElementById('view-transfer'),
+  };
+  const signal = document.getElementById('signal');
+  const statusLine = document.getElementById('status-line');
+  const codeInput = document.getElementById('code-input');
+  const codeDisplay = document.getElementById('code-display');
+  const transferList = document.getElementById('transfer-list');
+  const emptyNote = document.getElementById('empty-note');
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('file-input');
+
+  function showView(name) {
+    Object.values(views).forEach(v => v.classList.remove('active'));
+    views[name].classList.add('active');
+  }
+
+  function setSignal(state, text, cls) {
+    signal.dataset.state = state;
+    statusLine.textContent = text;
+    statusLine.className = 'status-line' + (cls ? ' ' + cls : '');
+  }
+
+  function fmtBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / (1024*1024)).toFixed(1) + ' MB';
+    return (n / (1024*1024*1024)).toFixed(2) + ' GB';
+  }
+
+  function ensureListVisible() {
+    if (transferList.children.length > 1) emptyNote.style.display = 'none';
+  }
+
+  // ---------- Peer setup ----------
+  function createPeer(withId) {
+    setSignal('connecting', 'opening connection…');
+    const p = withId ? new Peer(withId, peerConfig) : new Peer(peerConfig);
+
+    p.on('open', (id) => {
+      if (!withId) return; // joiner: nothing to show, waits for connect()
+      codeDisplay.textContent = id;
+    });
+
+    p.on('error', (err) => {
+      console.error('Peer error', err);
+      if (err.type === 'unavailable-id') {
+        // extremely unlikely with our code space; just retry once
+        p.destroy();
+        peer = null;
+        startHost();
+        return;
+      }
+      if (err.type === 'peer-unavailable') {
+        setSignal('error', 'no session found with that code', 'err');
+        return;
+      }
+      setSignal('error', 'connection error — try again', 'err');
+    });
+
+    p.on('connection', (c) => {
+      if (conn) { c.close(); return; } // only one peer at a time
+      bindConnection(c);
+    });
+
+    p.on('disconnected', () => {
+      setSignal('error', 'disconnected from signaling server', 'err');
+    });
+
+    return p;
+  }
+
+  function bindConnection(c) {
+    conn = c;
+    setSignal('connecting', 'linking to peer…');
+
+    conn.on('open', () => {
+      const code = codeDisplay.textContent !== '—' ? codeDisplay.textContent : codeInput.value.trim();
+      setSignal('connected', `connected — session ${code}`, 'ok');
+      showView('transfer');
+    });
+
+    conn.on('data', handleIncomingData);
+
+    conn.on('close', () => {
+      setSignal('idle', 'peer disconnected', 'err');
+      conn = null;
+    });
+
+    conn.on('error', (err) => {
+      console.error('Connection error', err);
+      setSignal('error', 'connection error', 'err');
+    });
+  }
+
+  // ---------- Host flow ----------
+  function startHost() {
+    const code = makeSessionCode();
+    codeDisplay.textContent = code;
+    showView('waiting');
+    peer = createPeer(code);
+  }
+
+  // ---------- Join flow ----------
+  function joinSession() {
+    const code = codeInput.value.trim().toLowerCase();
+    if (!code) return;
+    showView('waiting');
+    codeDisplay.textContent = code;
+    document.querySelector('#view-waiting .label').textContent = 'connecting to';
+    peer = createPeer(); // random id for the joiner
+    peer.on('open', () => {
+      const c = peer.connect(code, { reliable: true });
+      bindConnection(c);
+    });
+  }
+
+  // ---------- Sending ----------
+  function queueFiles(fileList) {
+    Array.from(fileList).forEach(file => {
+      const id = 'f' + Date.now() + Math.random().toString(36).slice(2, 8);
+      outgoing.set(id, { file, sent: 0 });
+      renderTransferRow(id, file.name, file.size, 'out');
+      sendQueue.push(id);
+    });
+    ensureListVisible();
+    if (!sending) pumpSendQueue();
+  }
+
+  function pumpSendQueue() {
+    if (sendQueue.length === 0) { sending = false; return; }
+    sending = true;
+    const id = sendQueue.shift();
+    sendFile(id).then(pumpSendQueue);
+  }
+
+  function sendFile(id) {
+    return new Promise((resolve) => {
+      const item = outgoing.get(id);
+      if (!item || !conn || !conn.open) { resolve(); return; }
+      const { file } = item;
+
+      conn.send({ type: 'meta', id, name: file.name, size: file.size });
+
+      const reader = new FileReader();
+      let offset = 0;
+
+      function readNextChunk() {
+        const slice = file.slice(offset, offset + CHUNK_SIZE);
+        reader.readAsArrayBuffer(slice);
+      }
+
+      reader.onload = (e) => {
+        if (!conn || !conn.open) { resolve(); return; }
+        conn.send({ type: 'chunk', id, data: e.target.result });
+        offset += e.target.result.byteLength;
+        item.sent = offset;
+        updateProgress(id, offset, file.size, 'out');
+
+        if (offset >= file.size) {
+          conn.send({ type: 'done', id });
+          markDone(id, 'out');
+          resolve();
+          return;
+        }
+
+        const dc = conn.dataChannel;
+        if (dc && dc.bufferedAmount > BUFFERED_AMOUNT_HIGH) {
+          const check = () => {
+            if (!conn || !conn.open) { resolve(); return; }
+            if (dc.bufferedAmount < BUFFERED_AMOUNT_LOW) {
+              readNextChunk();
+            } else {
+              setTimeout(check, 40);
+            }
+          };
+          setTimeout(check, 40);
+        } else {
+          readNextChunk();
+        }
+      };
+
+      reader.onerror = () => {
+        console.error('File read error', reader.error);
+        resolve();
+      };
+
+      readNextChunk();
+    });
+  }
+
+  // ---------- Receiving ----------
+  function handleIncomingData(msg) {
+    if (!msg || !msg.type) return;
+
+    if (msg.type === 'meta') {
+      incoming.set(msg.id, { name: msg.name, size: msg.size, received: 0, chunks: [] });
+      renderTransferRow(msg.id, msg.name, msg.size, 'in');
+      ensureListVisible();
+      return;
+    }
+
+    if (msg.type === 'chunk') {
+      const item = incoming.get(msg.id);
+      if (!item) return;
+      item.chunks.push(msg.data);
+      item.received += msg.data.byteLength;
+      updateProgress(msg.id, item.received, item.size, 'in');
+      return;
+    }
+
+    if (msg.type === 'done') {
+      const item = incoming.get(msg.id);
+      if (!item) return;
+      const blob = new Blob(item.chunks);
+      const url = URL.createObjectURL(blob);
+      markDone(msg.id, 'in', url, item.name);
+    }
+  }
+
+  // ---------- UI rendering ----------
+  function renderTransferRow(id, name, size, dir) {
+    const row = document.createElement('div');
+    row.className = 'transfer-item';
+    row.id = 'row-' + id;
+    row.innerHTML = `
+      <div class="t-top">
+        <div class="t-name"><span class="t-dir ${dir}">${dir === 'out' ? 'sending' : 'receiving'}</span>${escapeHtml(name)}</div>
+        <div class="t-meta">${fmtBytes(size)}</div>
+      </div>
+      <div class="t-bar-track"><div class="t-bar-fill ${dir}" id="bar-${id}"></div></div>
+      <div id="extra-${id}"></div>
+    `;
+    transferList.appendChild(row);
+  }
+
+  function updateProgress(id, done, total, dir) {
+    const bar = document.getElementById('bar-' + id);
+    if (!bar) return;
+    const pct = total > 0 ? Math.min(100, (done / total) * 100) : 100;
+    bar.style.width = pct.toFixed(1) + '%';
+    const meta = document.querySelector('#row-' + id + ' .t-meta');
+    if (meta) meta.textContent = `${fmtBytes(done)} / ${fmtBytes(total)}`;
+  }
+
+  function markDone(id, dir, url, name) {
+    const bar = document.getElementById('bar-' + id);
+    if (bar) { bar.style.width = '100%'; bar.classList.add('done'); }
+    if (dir === 'in' && url) {
+      const extra = document.getElementById('extra-' + id);
+      if (extra) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.className = 't-download';
+        a.textContent = 'Save file';
+        extra.appendChild(a);
+      }
+    }
+  }
+
+  function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  // ---------- Wire up UI ----------
+  document.getElementById('btn-start').addEventListener('click', startHost);
+
+  document.getElementById('btn-join').addEventListener('click', () => {
+    showView('join');
+    setTimeout(() => codeInput.focus(), 50);
+  });
+
+  document.getElementById('back-from-join').addEventListener('click', () => {
+    showView('landing');
+    setSignal('idle', 'not connected');
+  });
+
+  document.getElementById('back-from-waiting').addEventListener('click', () => {
+    if (peer) { peer.destroy(); peer = null; }
+    conn = null;
+    showView('landing');
+    setSignal('idle', 'not connected');
+  });
+
+  document.getElementById('btn-connect').addEventListener('click', joinSession);
+  codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinSession(); });
+
+  document.getElementById('btn-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(codeDisplay.textContent);
+      const btn = document.getElementById('btn-copy');
+      const original = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = original; }, 1400);
+    } catch {
+      // clipboard API unavailable; ignore silently
+    }
+  });
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length) queueFiles(e.target.files);
+    fileInput.value = '';
+  });
+  ['dragenter', 'dragover'].forEach(evt => {
+    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+  });
+  ['dragleave', 'drop'].forEach(evt => {
+    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.remove('drag-over'); });
+  });
+  dropzone.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files.length) queueFiles(e.dataTransfer.files);
+  });
+})();
+</script>
+</body>
+</html>
