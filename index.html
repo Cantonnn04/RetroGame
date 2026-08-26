@@ -112,7 +112,7 @@
     transition: width .5s ease, background .4s ease;
   }
   .signal[data-state="connecting"] .signal-fill {
-    width: 60%;
+    width: 30%;
     background: var(--amber);
     animation: pulse-slide 1.4s ease-in-out infinite;
   }
@@ -128,9 +128,9 @@
   .signal[data-state="error"] .signal-fill { width: 100%; background: var(--red); }
 
   @keyframes pulse-slide {
-    0% { transform: translateX(-40%); width: 30%; }
-    50% { transform: translateX(140%); width: 30%; }
-    100% { transform: translateX(-40%); width: 30%; }
+    0% { left: -30%; }
+    50% { left: 100%; }
+    100% { left: -30%; }
   }
 
   .status-line {
@@ -209,6 +209,12 @@
     text-transform: uppercase;
   }
   .join-row { display: flex; gap: 10px; }
+  .join-row input#code-input { min-width: 0; flex: 1 1 auto; }
+  .join-row button { flex-shrink: 0; }
+  @media (max-width: 420px) {
+    .join-row { flex-direction: column; }
+    .join-row button { width: 100%; }
+  }
   input#code-input {
     flex: 1;
     background: var(--ink);
