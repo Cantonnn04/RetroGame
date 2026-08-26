@@ -435,7 +435,7 @@
     <div class="join-form">
       <label for="code-input">Session code</label>
       <div class="join-row">
-        <input id="code-input" type="text" placeholder="amber-dial-07" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input id="code-input" type="text" placeholder="K7XQ2M" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="6" style="text-transform: uppercase; text-align: center; font-size: 20px; letter-spacing: 0.15em;">
         <button class="btn-primary" id="btn-connect">Connect</button>
       </div>
     </div>
@@ -481,13 +481,9 @@
   const BUFFERED_AMOUNT_HIGH = 4 * 1024 * 1024; // pause sending above 4MB buffered
   const BUFFERED_AMOUNT_LOW = 1 * 1024 * 1024;  // resume once below 1MB
 
-  // TURN relay fallback. Without this, connections that can't find a direct
-  // path (common on corporate/hotel wifi, or two peers behind strict/symmetric
-  // NATs) will hang forever at "linking to peer...". These are the Open Relay
-  // Project's public *test* credentials — fine to try this with, but they're
-  // shared by everyone using this demo config, so get your own free-tier
-  // credentials (e.g. metered.ca or Cloudflare) before relying on this for
-  // real use: https://www.metered.ca/tools/openrelay/
+  // TURN relay fallback, using your own Metered.ca credentials. Without this,
+  // connections that can't find a direct path (common on cellular/CGNAT, or
+  // corporate/hotel wifi) will hang forever at "linking to peer...".
   const peerConfig = {
     config: {
       iceServers: [
@@ -503,13 +499,14 @@
   const CONNECT_TIMEOUT_MS = 15000;
 
   // ---------- Session code generator ----------
-  const ADJ = ['amber','quiet','static','open','loose','clear','dark','narrow','stray','warm','cold','low','far','odd','pale','worn','faint','wide','still','bare'];
-  const NOUN = ['dial','wire','node','pulse','echo','relay','signal','channel','coil','patch','carrier','frequency','antenna','circuit','current','loop','wave','tone','link','beacon'];
+  // 6 characters, uppercase letters + numbers only.
+  const CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   function makeSessionCode() {
-    const a = ADJ[Math.floor(Math.random() * ADJ.length)];
-    const n = NOUN[Math.floor(Math.random() * NOUN.length)];
-    const d = String(Math.floor(Math.random() * 90) + 10);
-    return `${a}-${n}-${d}`;
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+      code += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+    }
+    return code;
   }
 
   // ---------- State ----------
@@ -647,7 +644,7 @@
 
   // ---------- Join flow ----------
   function joinSession() {
-    const code = codeInput.value.trim().toLowerCase();
+    const code = codeInput.value.trim().toUpperCase();
     if (!code) return;
     showView('waiting');
     codeDisplay.textContent = code;
@@ -831,6 +828,9 @@
 
   document.getElementById('btn-connect').addEventListener('click', joinSession);
   codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinSession(); });
+  codeInput.addEventListener('input', () => {
+    codeInput.value = codeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+  });
 
   document.getElementById('btn-copy').addEventListener('click', async () => {
     try {
